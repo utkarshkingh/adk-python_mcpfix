@@ -126,10 +126,10 @@ def retry_on_closed_resource(func):
   async def wrapper(self, *args, **kwargs):
     try:
       return await func(self, *args, **kwargs)
-    except anyio.ClosedResourceError:
+    except (anyio.ClosedResourceError, anyio.BrokenResourceError):
       # Simply retry the function - create_session will handle
       # detecting and replacing disconnected sessions
-      logger.info('Retrying %s due to closed resource', func.__name__)
+      logger.info('Retrying %s due to closed/broken resource', func.__name__)
       return await func(self, *args, **kwargs)
 
   return wrapper
@@ -369,7 +369,12 @@ class MCPSessionManager:
       except Exception:
         # If session creation fails, clean up the exit stack
         if exit_stack:
-          await exit_stack.aclose()
+          try:
+            await exit_stack.aclose()
+          except (anyio.BrokenResourceError, anyio.ClosedResourceError) as e:
+            # Resources might already be broken/closed due to connection issues
+            # Log the error but don't let it mask the original exception
+            logger.warning('Error during exit stack cleanup: %s', e)
         raise
 
   async def close(self):
